@@ -137,6 +137,7 @@ type Raft struct {
 	electionTimeout int
 	// number of ticks since it reached last heartbeatTimeout.
 	// only leader keeps heartbeatElapsed.
+	// TODO: 是否对这两个elapsed变量加锁
 	heartbeatElapsed int
 	// Ticks since it reached last electionTimeout when it is leader or candidate.
 	// Number of ticks since it reached last electionTimeout or received a
@@ -165,7 +166,20 @@ func newRaft(c *Config) *Raft {
 		panic(err.Error())
 	}
 	// Your Code Here (2A).
-	return nil
+	// TODO: c.peers not used
+	raft := &Raft{
+		id:   c.ID,
+		Term: 0,
+		Vote: 0,
+		State:            StateFollower,
+		heartbeatTimeout: c.HeartbeatTick,
+		electionTimeout:  c.ElectionTick,
+		RaftLog: &RaftLog{
+			storage: c.Storage,
+			applied: c.Applied,
+		},
+	}
+	return raft
 }
 
 // sendAppend sends an append RPC with new entries (if any) and the
@@ -183,16 +197,57 @@ func (r *Raft) sendHeartbeat(to uint64) {
 // tick advances the internal logical clock by a single tick.
 func (r *Raft) tick() {
 	// Your Code Here (2A).
+	switch r.State {
+	case StateLeader:
+		{
+			//发送心跳
+			r.heartbeatElapsed++
+			if r.heartbeatElapsed >= r.heartbeatTimeout {
+				for u := range r.Prs {
+					r.sendHeartbeat(u)
+				}
+				r.heartbeatElapsed = 0
+			}
+		}
+	default:
+		{
+			// 接收leader心跳超时
+			r.electionElapsed++
+			if r.electionElapsed >= r.electionElapsed {
+				r.becomeCandidate()
+				// TODO: 是否立即发送，还是在becomeCandidate()中发送
+			}
+		}
+	}
 }
 
 // becomeFollower transform this peer's state to Follower
+// 1. leader发现有更高term的节点
+// 2. Candidate竞选失败
 func (r *Raft) becomeFollower(term uint64, lead uint64) {
 	// Your Code Here (2A).
+	r.Term = term
+	r.Lead = lead
+	r.State = StateFollower
+	r.electionElapsed = 0
 }
 
 // becomeCandidate transform this peer's state to candidate
 func (r *Raft) becomeCandidate() {
 	// Your Code Here (2A).
+	r.State = StateCandidate
+	r.electionElapsed = 0
+	r.Term++
+	// 发送选举
+	r.msgs = append(r.msgs, pb.Message{
+		MsgType:              pb.MessageType_MsgRequestVote,
+		//TODO: to field
+		To:                   0,
+		From:                 r.id,
+		Term:                 r.Term,
+		//TODO: 还有很多字段忽略掉了
+	})
+
 }
 
 // becomeLeader transform this peer's state to leader
